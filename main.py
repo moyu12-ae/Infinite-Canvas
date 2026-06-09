@@ -1356,6 +1356,34 @@ def fetch_remote_update_notes(url: str, version: str = "", timeout: float = 5.0)
         info["error"] = str(exc)
     return info
 
+def fetch_update_notes_with_fallback(preferred_source: str, version: str, timeout: float = 3.0) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+    urls = {
+        "github": GITHUB_UPDATE_NOTES_URL,
+        "modelscope": MODELSCOPE_UPDATE_NOTES_URL,
+    }
+    preferred = preferred_source if preferred_source in urls else "github"
+    order = [preferred, "modelscope" if preferred == "github" else "github"]
+    notes_by_source: Dict[str, Any] = {}
+    best_notes: Dict[str, Any] = {"version": version, "items": []}
+    for source in order:
+        notes = fetch_remote_update_notes(urls[source], version, timeout=timeout)
+        notes["source"] = source
+        notes_by_source[source] = notes
+        if notes.get("ok") and (notes.get("items") or []):
+            best_notes = notes
+            break
+    for source, url in urls.items():
+        if source not in notes_by_source:
+            notes_by_source[source] = {
+                "ok": False,
+                "error": "未尝试：已有更新说明可用" if best_notes.get("items") else "未尝试",
+                "url": url,
+                "source": source,
+                "version": version,
+                "items": [],
+            }
+    return best_notes, notes_by_source
+
 def versioned_static_html(html: str) -> str:
     version = current_app_version()
     if not version:
@@ -1695,32 +1723,7 @@ def check_update():
     update_available = bool(best and version_gt(best["version"], current))
     notes_by_source: Dict[str, Any] = {}
     if best and best.get("version"):
-        notes_urls = {
-            "github": GITHUB_UPDATE_NOTES_URL,
-            "modelscope": MODELSCOPE_UPDATE_NOTES_URL,
-        }
-        notes_holder: Dict[str, Dict[str, Any]] = {}
-        def _notes_probe(key: str, url: str):
-            notes_holder[key] = fetch_remote_update_notes(url, best["version"], timeout=5.0)
-            notes_holder[key]["source"] = key
-        notes_threads = [
-            Thread(target=_notes_probe, args=("github", notes_urls["github"]), daemon=True),
-            Thread(target=_notes_probe, args=("modelscope", notes_urls["modelscope"]), daemon=True),
-        ]
-        for t in notes_threads:
-            t.start()
-        for t in notes_threads:
-            t.join(timeout=5.5)
-        notes_by_source = {
-            "github": notes_holder.get("github") or {"ok": False, "error": "检测超时（超过 5s）", "url": notes_urls["github"], "source": "github", "items": []},
-            "modelscope": notes_holder.get("modelscope") or {"ok": False, "error": "检测超时（超过 5s）", "url": notes_urls["modelscope"], "source": "modelscope", "items": []},
-        }
-        best_notes = notes_by_source.get(str(best.get("source") or "")) or {}
-        if not best_notes.get("ok"):
-            for item in notes_by_source.values():
-                if item.get("ok"):
-                    best_notes = item
-                    break
+        best_notes, notes_by_source = fetch_update_notes_with_fallback(str(best.get("source") or "github"), best["version"], timeout=3.0)
         best["update_notes"] = best_notes if best_notes.get("ok") else {"version": best["version"], "items": []}
     return {
         "current": current,
