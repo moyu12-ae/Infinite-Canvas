@@ -1,0 +1,100 @@
+# GitHub Actions 工作流：自动构建 macOS 安装包
+# 当创建新的 Release 时自动触发构建
+
+name: Build macOS App
+
+on:
+  release:
+    types: [created]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: '版本号 (例如: 1.0.0)'
+        required: false
+        default: 'dev'
+
+jobs:
+  build-macos:
+    runs-on: macos-latest
+    strategy:
+      matrix:
+        # 支持两种架构
+        arch: [x86_64, arm64]
+        include:
+          - arch: x86_64
+            name: Intel
+          - arch: arm64
+            name: Apple Silicon
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 设置 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: 安装依赖
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller
+
+      - name: 构建应用 (${{ matrix.name }})
+        run: |
+          # 检查图标文件
+          ICON_PARAM=""
+          if [ -f "static/images/icon.icns" ]; then
+            ICON_PARAM="--icon static/images/icon.icns"
+          fi
+
+          pyinstaller \
+            --name "Infinite Canvas" \
+            --windowed \
+            --onedir \
+            $ICON_PARAM \
+            --add-data "static:static" \
+            --add-data "workflows:workflows" \
+            --add-data "tools:tools" \
+            --add-data "VERSION:." \
+            --add-data "requirements.txt:." \
+            --hidden-import uvicorn.logging \
+            --hidden-import uvicorn.loops \
+            --hidden-import uvicorn.loops.auto \
+            --hidden-import uvicorn.protocols \
+            --hidden-import uvicorn.protocols.http \
+            --hidden-import uvicorn.protocols.http.auto \
+            --hidden-import uvicorn.protocols.websockets \
+            --hidden-import uvicorn.protocols.websockets.auto \
+            --hidden-import uvicorn.lifespan \
+            --hidden-import uvicorn.lifespan.on \
+            --noconfirm \
+            --clean \
+            main.py
+
+      - name: 创建 DMG
+        run: |
+          hdiutil create \
+            -volname "Infinite Canvas" \
+            -srcfolder "dist/Infinite Canvas" \
+            -ov \
+            -format UDZO \
+            "dist/Infinite Canvas-${{ matrix.arch }}.dmg"
+
+      - name: 上传构建产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: Infinite-Canvas-macOS-${{ matrix.arch }}
+          path: |
+            dist/Infinite Canvas-${{ matrix.arch }}.dmg
+          retention-days: 30
+
+      - name: 上传到 Release
+        if: github.event_name == 'release'
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            dist/Infinite Canvas-${{ matrix.arch }}.dmg
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

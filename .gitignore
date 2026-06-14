@@ -40,3 +40,8 @@ logs/
 # Temporary files
 *.tmp
 *.temp
+
+# PyInstaller
+*.spec
+*.app
+*.dmg
